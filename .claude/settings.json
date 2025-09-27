@@ -1,0 +1,30 @@
+{
+    "permissions": {
+        "allow": [
+            "Bash(cat:*)",
+            "Bash(touch:*)",
+            "Bash(cp:*)"
+        ]
+    },
+    "hooks": {
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "echo 'THINK IN ENGLISH AND RESPONSE IN KOREAN'"
+                    },
+                    {
+                        "type": "command",
+                        "command": "bash -c 'input=$(cat); prompt=$(echo \"$input\" | jq -r \".prompt\"); echo \"[$(date)] User Query: $prompt\" >> ./.claude/command-log.txt'"
+                    }
+                ]
+            }
+        ]
+    },
+    "statusLine": {
+        "type": "command",
+        "command": "uv run .claude/status_lines/status_line.py",
+        "padding": 0
+    }
+}
