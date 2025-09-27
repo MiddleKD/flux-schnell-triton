@@ -4,19 +4,18 @@
 
 ## 기술 스택
 - **언어**: Python 3.8+
-- **주요 의존성**: fvcore, ptflops, torch.profiler, onnxruntime, tensorrt
+- **주요 의존성**: diffusers, transformers, pytorch, triton inference server, tirton python backend(DLPack)
 - **CLI 프레임워크**: Click + Rich
-- **테스트**: pytest, pytest-cov
+- **테스트**: 1순위: model.py를 직접 실행. 2순위: pytest(optional)
 - **빌드**: Makefile 기반 명령어 통합
 - **가상환경**: uv를 이용하세요
 
 ## 아키텍처 원칙
-- 어댑터 패턴으로 각 프레임워크별 도구 통합 (fvcore, ptflops, onnxruntime, trtexec)
-- 계층화된 의존성: 핵심/선택적 패키지로 분리
 - 우아한 성능 저하: 누락된 의존성 시 기능 비활성화
 
 ## 개발 가이드라인
 - TDD 필수: 테스트 먼저 작성
+    - 테스트는 너무 많지 않게 정말 필요한 부분만 작성하세요.
 - 파일당 500줄 이하 유지
 - 단순성 우선: 복잡한 패턴 금지
 
