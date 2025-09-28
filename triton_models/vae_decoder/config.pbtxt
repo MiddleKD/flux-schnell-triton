@@ -9,7 +9,7 @@ max_batch_size: 4
 input [
   {
     name: "latents"
-    data_type: TYPE_FP32
+    data_type: TYPE_BF16  # 코드에서 VAE가 bfloat16 사용
     dims: [ 16, -1, -1 ]  # [channels, height, width] - 동적 크기
   },
   {
@@ -27,7 +27,7 @@ input [
 output [
   {
     name: "images"
-    data_type: TYPE_FP32
+    data_type: TYPE_BF16  # 코드와 dtype 일치
     dims: [ 3, -1, -1 ]  # [RGB channels, height, width] - 동적 크기
   }
 ]
@@ -71,38 +71,6 @@ parameters [
   }
 ]
 
-# 버전 정책
-version_policy: { latest { num_versions: 1 } }
-
-# 최적화 설정
-optimization {
-  cuda {
-    graphs: true
-    graph_spec {
-      batch_size: 1
-      input [
-        {
-          key: "latents"
-          value: {
-            dims: [ 16, 128, 128 ]  # 1024x1024 이미지에 대한 latent 크기
-          }
-        }
-      ]
-    }
-    graph_spec {
-      batch_size: 2
-      input [
-        {
-          key: "latents"
-          value: {
-            dims: [ 16, 128, 128 ]
-          }
-        }
-      ]
-    }
-  }
-}
-
 # VAE 타일링 설정 (큰 이미지 처리용)
 parameters [
   {
@@ -115,6 +83,34 @@ parameters [
   }
 ]
 
+# 버전 정책
+version_policy: { latest { num_versions: 1 } }
+
+# 최적화 설정
+optimization {
+  cuda {
+    graphs: true
+    graph_spec {
+      batch_size: 1
+      input [
+        {
+          key: "latents"
+          value: { dims: [ 16, 128, 128 ] }  # 1024x1024 이미지에 대한 latent 크기
+        }
+      ]
+    }
+    graph_spec {
+      batch_size: 2
+      input [
+        {
+          key: "latents"
+          value: { dims: [ 16, 128, 128 ] }
+        }
+      ]
+    }
+  }
+}
+
 # 모델 워밍업
 model_warmup [
   {
@@ -124,7 +120,7 @@ model_warmup [
       {
         key: "latents"
         value: {
-          input_data_type: TYPE_FP32
+          input_data_type: TYPE_BF16  # 코드와 dtype 일치
           dims: [ 16, 128, 128 ]
           # 실제 데이터는 런타임에 채워짐
         }

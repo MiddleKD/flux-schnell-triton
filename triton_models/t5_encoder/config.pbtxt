@@ -1,7 +1,3 @@
-# T5 Text Encoder Configuration
-# T5 모델을 사용한 텍스트 시퀀스 인코딩 서비스
-# GPU에서 실행되며 텍스트를 sequence embeddings로 변환
-
 name: "t5_encoder"
 platform: "python"
 max_batch_size: 8
@@ -23,12 +19,12 @@ input [
 output [
   {
     name: "sequence_embeds"
-    data_type: TYPE_FP32
+    data_type: TYPE_FP16  # 코드에서 모델 dtype 존중
     dims: [ 512, 4096 ]  # [seq_len, embedding_dim]
   },
   {
     name: "text_ids"
-    data_type: TYPE_FP32
+    data_type: TYPE_FP16  # 코드에서 모델 dtype 존중
     dims: [ 512, 3 ]  # 텍스트 위치 ID
   }
 ]
@@ -76,9 +72,7 @@ optimization {
       input [
         {
           key: "input_ids"
-          value: {
-            dims: [ 512 ]
-          }
+          value: { dims: [ 512 ] }
         }
       ]
     }
@@ -87,9 +81,7 @@ optimization {
       input [
         {
           key: "input_ids"
-          value: {
-            dims: [ 512 ]
-          }
+          value: { dims: [ 512 ] }
         }
       ]
     }
