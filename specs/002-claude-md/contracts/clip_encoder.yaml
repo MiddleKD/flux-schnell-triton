@@ -1,0 +1,152 @@
+openapi: 3.0.0
+info:
+  title: CLIP Text Encoder API
+  description: CLIP 모델을 사용한 텍스트 인코딩 서비스
+  version: 1.0.0
+
+paths:
+  /v2/models/clip_encoder/infer:
+    post:
+      summary: 텍스트를 CLIP 임베딩으로 변환
+      description: |
+        CLIP 텍스트 인코더를 사용하여 입력 텍스트를 pooled embeddings로 변환합니다.
+        flux_pipeline.py의 _get_clip_prompt_embeds 로직을 구현합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - inputs
+              properties:
+                inputs:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - shape
+                      - datatype
+                      - data
+                    properties:
+                      name:
+                        type: string
+                        enum: [input_ids, attention_mask]
+                      shape:
+                        type: array
+                        items:
+                          type: integer
+                      datatype:
+                        type: string
+                        enum: [INT64, INT32]
+                      data:
+                        type: array
+                        items:
+                          type: integer
+
+      responses:
+        '200':
+          description: 성공적으로 CLIP 임베딩 생성됨
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outputs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          const: pooled_embeds
+                        shape:
+                          type: array
+                          items:
+                            type: integer
+                          description: [batch_size, 768]
+                        datatype:
+                          type: string
+                          const: FP32
+                        data:
+                          type: array
+                          items:
+                            type: number
+                          description: CLIP pooled embeddings
+
+        '400':
+          description: 잘못된 토큰 입력
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    examples:
+                      - "Input sequence too long (max 77 tokens)"
+                      - "Invalid token ID"
+
+components:
+  schemas:
+    CLIPInput:
+      type: object
+      properties:
+        input_ids:
+          description: CLIP 토큰화된 입력 ID
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+              minimum: 0
+              maximum: 49407  # CLIP vocabulary size
+          maxItems: 77  # CLIP max sequence length
+        attention_mask:
+          description: 어텐션 마스크 (옵션)
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+              enum: [0, 1]
+
+    CLIPOutput:
+      type: object
+      properties:
+        pooled_embeds:
+          description: CLIP pooled embeddings
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+            minItems: 768
+            maxItems: 768
+
+  examples:
+    SinglePrompt:
+      summary: 단일 프롬프트 인코딩
+      value:
+        inputs:
+          - name: input_ids
+            shape: [1, 77]
+            datatype: INT64
+            data: [[49406, 320, 2368, 5193, 320, 1320, 515, 1139, 7593, 1079, 49407, 0, 0, ...]]
+          - name: attention_mask
+            shape: [1, 77]
+            datatype: INT32
+            data: [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, ...]]
+
+    BatchPrompts:
+      summary: 배치 프롬프트 인코딩
+      value:
+        inputs:
+          - name: input_ids
+            shape: [2, 77]
+            datatype: INT64
+            data: [
+              [49406, 320, 2368, 5193, 320, 1320, 515, 1139, 7593, 1079, 49407, 0, ...],
+              [49406, 320, 1710, 6005, 49407, 0, 0, 0, 0, 0, 0, 0, ...]
+            ]

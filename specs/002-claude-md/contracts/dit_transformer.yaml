@@ -1,0 +1,185 @@
+openapi: 3.0.0
+info:
+  title: DIT Transformer API
+  description: DIT (Diffusion Transformer) 모델을 사용한 노이즈 예측 서비스
+  version: 1.0.0
+
+paths:
+  /v2/models/dit_transformer/infer:
+    post:
+      summary: 노이즈 예측 추론
+      description: |
+        DIT 트랜스포머를 사용하여 주어진 latents와 텍스트 임베딩으로부터 노이즈를 예측합니다.
+        flux_pipeline.py의 denoising loop에서 transformer 호출 부분을 구현합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - inputs
+              properties:
+                inputs:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - shape
+                      - datatype
+                      - data
+                    properties:
+                      name:
+                        type: string
+                        enum: [
+                          hidden_states,
+                          timestep,
+                          guidance,
+                          pooled_projections,
+                          encoder_hidden_states,
+                          txt_ids,
+                          img_ids
+                        ]
+                      shape:
+                        type: array
+                        items:
+                          type: integer
+                      datatype:
+                        type: string
+                        const: FP32
+                      data:
+                        type: array
+                        items:
+                          type: number
+
+      responses:
+        '200':
+          description: 성공적으로 노이즈 예측 완료
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outputs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          const: noise_pred
+                        shape:
+                          type: array
+                          items:
+                            type: integer
+                          description: [batch_size, num_patches, 64]
+                        datatype:
+                          type: string
+                          const: FP32
+                        data:
+                          type: array
+                          items:
+                            type: number
+                          description: 예측된 노이즈
+
+components:
+  schemas:
+    DITInput:
+      type: object
+      properties:
+        hidden_states:
+          description: 패킹된 latent 텐서
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items:
+                type: number
+              minItems: 64
+              maxItems: 64
+        timestep:
+          description: 현재 타임스텝 (0-1 범위)
+          type: array
+          items:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+        guidance:
+          description: 가이던스 스케일
+          type: array
+          items:
+            type: number
+            minimum: 0.0
+        pooled_projections:
+          description: CLIP pooled embeddings
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+            minItems: 768
+            maxItems: 768
+        encoder_hidden_states:
+          description: T5 sequence embeddings
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items:
+                type: number
+              minItems: 4096
+              maxItems: 4096
+        txt_ids:
+          description: 텍스트 위치 ID
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+            minItems: 3
+            maxItems: 3
+        img_ids:
+          description: 이미지 위치 ID
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+            minItems: 3
+            maxItems: 3
+
+    DITOutput:
+      type: object
+      properties:
+        noise_pred:
+          description: 예측된 노이즈 (latents와 동일한 shape)
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items:
+                type: number
+              minItems: 64
+              maxItems: 64
+
+  examples:
+    DenoiseStep:
+      summary: 단일 디노이징 스텝
+      value:
+        inputs:
+          - name: hidden_states
+            shape: [1, 4096, 64]
+            datatype: FP32
+            data: [[[0.1, -0.2, 0.3, ...], [0.4, -0.1, 0.2, ...], ...]]
+          - name: timestep
+            shape: [1]
+            datatype: FP32
+            data: [0.5]
+          - name: guidance
+            shape: [1]
+            datatype: FP32
+            data: [0.0]

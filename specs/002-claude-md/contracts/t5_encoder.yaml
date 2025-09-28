@@ -1,0 +1,136 @@
+openapi: 3.0.0
+info:
+  title: T5 Text Encoder API
+  description: T5 모델을 사용한 텍스트 시퀀스 인코딩 서비스
+  version: 1.0.0
+
+paths:
+  /v2/models/t5_encoder/infer:
+    post:
+      summary: 텍스트를 T5 시퀀스 임베딩으로 변환
+      description: |
+        T5 텍스트 인코더를 사용하여 입력 텍스트를 sequence embeddings로 변환합니다.
+        flux_pipeline.py의 _get_t5_prompt_embeds 로직을 구현합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - inputs
+              properties:
+                inputs:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - shape
+                      - datatype
+                      - data
+                    properties:
+                      name:
+                        type: string
+                        enum: [input_ids, attention_mask]
+                      shape:
+                        type: array
+                        items:
+                          type: integer
+                      datatype:
+                        type: string
+                        enum: [INT64, INT32]
+                      data:
+                        type: array
+                        items:
+                          type: integer
+
+      responses:
+        '200':
+          description: 성공적으로 T5 임베딩 생성됨
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outputs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          enum: [sequence_embeds, text_ids]
+                        shape:
+                          type: array
+                          items:
+                            type: integer
+                        datatype:
+                          type: string
+                          const: FP32
+                        data:
+                          type: array
+                          items:
+                            type: number
+
+components:
+  schemas:
+    T5Input:
+      type: object
+      properties:
+        input_ids:
+          description: T5 토큰화된 입력 ID
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+              minimum: 0
+              maximum: 32127  # T5 vocabulary size
+          maxItems: 512  # max_sequence_length
+        attention_mask:
+          description: 어텐션 마스크
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+              enum: [0, 1]
+
+    T5Output:
+      type: object
+      properties:
+        sequence_embeds:
+          description: T5 sequence embeddings
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items:
+                type: number
+              minItems: 4096
+              maxItems: 4096
+        text_ids:
+          description: 텍스트 위치 ID
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+            minItems: 3
+            maxItems: 3
+
+  examples:
+    StandardEncoding:
+      summary: 표준 T5 인코딩
+      value:
+        inputs:
+          - name: input_ids
+            shape: [1, 512]
+            datatype: INT64
+            data: [[0, 71, 1712, 3, 9, 1320, 24, 845, 7593, 296, 1, 0, 0, ...]]
+          - name: attention_mask
+            shape: [1, 512]
+            datatype: INT32
+            data: [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, ...]]

@@ -1,0 +1,177 @@
+openapi: 3.0.0
+info:
+  title: BLS Orchestrator API
+  description: FLUX 파이프라인 전체 오케스트레이션을 담당하는 BLS 모델
+  version: 1.0.0
+
+paths:
+  /v2/models/bls/infer:
+    post:
+      summary: 텍스트로부터 이미지 생성
+      description: |
+        전체 FLUX 파이프라인을 오케스트레이션하여 텍스트 프롬프트로부터 이미지를 생성합니다.
+        내부적으로 CLIP, T5, DIT, VAE 모델들을 순차적으로 호출합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - inputs
+              properties:
+                inputs:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - shape
+                      - datatype
+                      - data
+                    properties:
+                      name:
+                        type: string
+                        enum: [prompt, num_inference_steps, guidance_scale, height, width]
+                      shape:
+                        type: array
+                        items:
+                          type: integer
+                      datatype:
+                        type: string
+                        enum: [BYTES, INT32, FP32]
+                      data:
+                        type: array
+                        description: 입력 데이터 (prompt는 string array, 나머지는 number array)
+                parameters:
+                  type: object
+                  properties:
+                    batch_size:
+                      type: integer
+                      default: 1
+                    sequence_id:
+                      type: integer
+                      description: 배치 시퀀스 ID
+
+      responses:
+        '200':
+          description: 성공적으로 이미지 생성됨
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outputs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          const: images
+                        shape:
+                          type: array
+                          items:
+                            type: integer
+                          description: [batch_size, 3, height, width]
+                        datatype:
+                          type: string
+                          const: FP32
+                        data:
+                          type: array
+                          items:
+                            type: number
+                          description: 생성된 이미지 픽셀 값 (0-1 범위)
+
+        '400':
+          description: 잘못된 입력 파라미터
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    examples:
+                      - "Invalid prompt: empty string not allowed"
+                      - "Height/width must be divisible by 16"
+
+        '500':
+          description: 내부 모델 실행 오류
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    examples:
+                      - "CLIP encoder execution failed"
+                      - "GPU memory insufficient"
+
+components:
+  schemas:
+    InputSpec:
+      type: object
+      properties:
+        prompt:
+          description: 텍스트 프롬프트 (최대 512 토큰)
+          type: array
+          items:
+            type: string
+          maxItems: 77  # CLIP 제한
+        num_inference_steps:
+          description: DIT 추론 스텝 수
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 4
+        guidance_scale:
+          description: 가이던스 스케일
+          type: number
+          minimum: 0.0
+          maximum: 20.0
+          default: 0.0
+        height:
+          description: 출력 이미지 높이 (16의 배수)
+          type: integer
+          minimum: 256
+          maximum: 2048
+          default: 1024
+        width:
+          description: 출력 이미지 너비 (16의 배수)
+          type: integer
+          minimum: 256
+          maximum: 2048
+          default: 1024
+
+  examples:
+    SimpleGeneration:
+      summary: 기본 이미지 생성
+      value:
+        inputs:
+          - name: prompt
+            shape: [1]
+            datatype: BYTES
+            data: ["A cat holding a sign that says hello world"]
+          - name: num_inference_steps
+            shape: [1]
+            datatype: INT32
+            data: [4]
+          - name: guidance_scale
+            shape: [1]
+            datatype: FP32
+            data: [0.0]
+
+    BatchGeneration:
+      summary: 배치 이미지 생성
+      value:
+        inputs:
+          - name: prompt
+            shape: [2]
+            datatype: BYTES
+            data: ["A beautiful landscape", "A futuristic city"]
+          - name: num_inference_steps
+            shape: [1]
+            datatype: INT32
+            data: [4]

@@ -1,0 +1,173 @@
+openapi: 3.0.0
+info:
+  title: VAE Decoder API
+  description: VAE 디코더를 사용한 latent-to-image 변환 서비스
+  version: 1.0.0
+
+paths:
+  /v2/models/vae_decoder/infer:
+    post:
+      summary: Latent를 이미지로 디코딩
+      description: |
+        VAE 디코더를 사용하여 latent space의 텐서를 실제 이미지로 변환합니다.
+        flux_pipeline.py의 vae.decode 호출 부분을 구현합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - inputs
+              properties:
+                inputs:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - shape
+                      - datatype
+                      - data
+                    properties:
+                      name:
+                        type: string
+                        enum: [latents, height, width]
+                      shape:
+                        type: array
+                        items:
+                          type: integer
+                      datatype:
+                        type: string
+                        enum: [FP32, INT32]
+                      data:
+                        type: array
+
+      responses:
+        '200':
+          description: 성공적으로 이미지 디코딩 완료
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outputs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          const: images
+                        shape:
+                          type: array
+                          items:
+                            type: integer
+                          description: [batch_size, 3, height, width]
+                        datatype:
+                          type: string
+                          const: FP32
+                        data:
+                          type: array
+                          items:
+                            type: number
+                          description: RGB 이미지 픽셀 값 (0-1 범위)
+
+        '400':
+          description: 잘못된 latent 입력
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    examples:
+                      - "Invalid latent dimensions"
+                      - "Height/width not compatible with latent size"
+
+components:
+  schemas:
+    VAEInput:
+      type: object
+      properties:
+        latents:
+          description: 디노이징된 latent 텐서 (패킹 해제됨)
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items:
+                type: array
+                items:
+                  type: number
+                minItems: 16  # latent channels
+                maxItems: 16
+        height:
+          description: 출력 이미지 높이
+          type: integer
+          minimum: 256
+          maximum: 2048
+        width:
+          description: 출력 이미지 너비
+          type: integer
+          minimum: 256
+          maximum: 2048
+
+    VAEOutput:
+      type: object
+      properties:
+        images:
+          description: 디코딩된 RGB 이미지
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items:
+                type: array
+                items:
+                  type: number
+                  minimum: 0.0
+                  maximum: 1.0
+                minItems: 3  # RGB channels
+                maxItems: 3
+
+  examples:
+    StandardDecoding:
+      summary: 표준 VAE 디코딩
+      value:
+        inputs:
+          - name: latents
+            shape: [1, 16, 128, 128]
+            datatype: FP32
+            data: [[[[0.1, -0.2, 0.3, ...], [0.4, -0.1, 0.2, ...], ...], ...]]
+          - name: height
+            shape: [1]
+            datatype: INT32
+            data: [1024]
+          - name: width
+            shape: [1]
+            datatype: INT32
+            data: [1024]
+
+    BatchDecoding:
+      summary: 배치 VAE 디코딩
+      value:
+        inputs:
+          - name: latents
+            shape: [2, 16, 64, 64]
+            datatype: FP32
+            data: [
+              [[[0.1, -0.2, ...], [...]], ...],
+              [[[0.3, -0.4, ...], [...]], ...]
+            ]
+          - name: height
+            shape: [1]
+            datatype: INT32
+            data: [512]
+          - name: width
+            shape: [1]
+            datatype: INT32
+            data: [512]
