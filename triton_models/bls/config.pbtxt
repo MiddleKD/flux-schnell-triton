@@ -1,0 +1,99 @@
+# BLS Orchestrator Configuration
+# FLUX 파이프라인 전체 오케스트레이션을 담당하는 BLS 모델
+# CPU에서 실행되며 다른 GPU 모델들을 순차적으로 호출
+
+name: "bls"
+platform: "python"
+max_batch_size: 8
+
+input [
+  {
+    name: "prompt"
+    data_type: TYPE_STRING
+    dims: [ -1 ]  # 가변 배치 크기
+  },
+  {
+    name: "num_inference_steps"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "guidance_scale"
+    data_type: TYPE_FP32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "height"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "width"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+    optional: true
+  }
+]
+
+output [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [ 3, -1, -1 ]  # [channels, height, width] - 동적 크기
+  }
+]
+
+# BLS는 CPU에서 실행 (계산 부하가 적고 오케스트레이션만 담당)
+instance_group [
+  {
+    count: 1
+    kind: KIND_CPU
+  }
+]
+
+# 동적 배치 설정
+dynamic_batching {
+  max_queue_delay_microseconds: 100000  # 100ms
+  preferred_batch_size: [ 2, 4 ]
+}
+
+# 기본 파라미터 값들
+parameters [
+  {
+    key: "default_num_inference_steps"
+    value: { string_value: "4" }
+  },
+  {
+    key: "default_guidance_scale"
+    value: { string_value: "0.0" }
+  },
+  {
+    key: "default_height"
+    value: { string_value: "1024" }
+  },
+  {
+    key: "default_width"
+    value: { string_value: "1024" }
+  }
+]
+
+# 모델 워밍업 (서버 시작 시 초기화)
+model_warmup [
+  {
+    name: "warmup_sample"
+    batch_size: 1
+    inputs [
+      {
+        key: "prompt"
+        value: {
+          input_data_type: TYPE_STRING
+          dims: [ 1 ]
+          string_data: [ "warmup test prompt" ]
+        }
+      }
+    ]
+  }
+]

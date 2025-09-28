@@ -1,0 +1,150 @@
+# VAE Decoder Configuration
+# VAE 디코더를 사용한 latent-to-image 변환 서비스
+# GPU에서 실행되며 최종 이미지를 생성
+
+name: "vae_decoder"
+platform: "python"
+max_batch_size: 4
+
+input [
+  {
+    name: "latents"
+    data_type: TYPE_FP32
+    dims: [ 16, -1, -1 ]  # [channels, height, width] - 동적 크기
+  },
+  {
+    name: "height"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+  },
+  {
+    name: "width"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+  }
+]
+
+output [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [ 3, -1, -1 ]  # [RGB channels, height, width] - 동적 크기
+  }
+]
+
+# GPU 인스턴스 설정
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [ 0 ]
+  }
+]
+
+# 동적 배치 설정
+dynamic_batching {
+  max_queue_delay_microseconds: 100000  # 100ms
+  preferred_batch_size: [ 2, 4 ]
+}
+
+# VAE 모델 관련 파라미터들
+parameters [
+  {
+    key: "model_name"
+    value: { string_value: "black-forest-labs/FLUX.1-schnell" }
+  },
+  {
+    key: "latent_channels"
+    value: { string_value: "16" }
+  },
+  {
+    key: "vae_scale_factor"
+    value: { string_value: "8" }
+  },
+  {
+    key: "scaling_factor"
+    value: { string_value: "0.3611" }
+  },
+  {
+    key: "shift_factor"
+    value: { string_value: "0.1159" }
+  }
+]
+
+# 버전 정책
+version_policy: { latest { num_versions: 1 } }
+
+# 최적화 설정
+optimization {
+  cuda {
+    graphs: true
+    graph_spec {
+      batch_size: 1
+      input [
+        {
+          key: "latents"
+          value: {
+            dims: [ 16, 128, 128 ]  # 1024x1024 이미지에 대한 latent 크기
+          }
+        }
+      ]
+    }
+    graph_spec {
+      batch_size: 2
+      input [
+        {
+          key: "latents"
+          value: {
+            dims: [ 16, 128, 128 ]
+          }
+        }
+      ]
+    }
+  }
+}
+
+# VAE 타일링 설정 (큰 이미지 처리용)
+parameters [
+  {
+    key: "enable_vae_tiling"
+    value: { string_value: "true" }
+  },
+  {
+    key: "tile_sample_min_size"
+    value: { string_value: "512" }
+  }
+]
+
+# 모델 워밍업
+model_warmup [
+  {
+    name: "vae_warmup"
+    batch_size: 1
+    inputs [
+      {
+        key: "latents"
+        value: {
+          input_data_type: TYPE_FP32
+          dims: [ 16, 128, 128 ]
+          # 실제 데이터는 런타임에 채워짐
+        }
+      },
+      {
+        key: "height"
+        value: {
+          input_data_type: TYPE_INT32
+          dims: [ 1 ]
+          int_data: [ 1024 ]
+        }
+      },
+      {
+        key: "width"
+        value: {
+          input_data_type: TYPE_INT32
+          dims: [ 1 ]
+          int_data: [ 1024 ]
+        }
+      }
+    ]
+  }
+]
