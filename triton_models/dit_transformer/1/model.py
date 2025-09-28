@@ -14,20 +14,66 @@ import json
 import numpy as np
 from typing import Dict, List, Optional
 
-# Triton Python Backend
-try:
-    import triton_python_backend_utils as pb_utils
-    TRITON_AVAILABLE = True
-except ImportError:
-    TRITON_AVAILABLE = False
-    print("⚠️ Triton Python Backend not available - running in test mode")
+# ===================================================================
+# 공통 함수들 (common_functions_template.py에서 복사)
+# ===================================================================
 
-# DLPack 지원 확인 (헌장 요구사항: 우아한 성능 저하)
-try:
-    import torch.utils.dlpack
-    DLPACK_AVAILABLE = True
-except ImportError:
-    DLPACK_AVAILABLE = False
+def check_triton_availability():
+    """Triton Python Backend 가용성 체크 및 Mock 설정"""
+    try:
+        import triton_python_backend_utils as pb_utils
+        return True, pb_utils
+    except ImportError:
+        import logging
+        logging.warning("Triton backend not available - running in test mode")
+
+        class MockPbUtils:
+            class Tensor:
+                def __init__(self, name, data): pass
+            class InferenceRequest: pass
+            class InferenceResponse:
+                def __init__(self, output_tensors=None, error=None): pass
+            class TritonError:
+                def __init__(self, message): pass
+
+        return False, MockPbUtils()
+
+def initialize_model_base(args, model_name: str, required_modules):
+    """모든 모델의 공통 초기화 로직"""
+    import json
+    import logging
+    logging.basicConfig(level=logging.INFO, format=f'[{model_name}] %(message)s')
+
+    # Triton 가용성 체크
+    triton_available, pb_utils = check_triton_availability()
+
+    # 모델 config 파싱
+    model_config = json.loads(args['model_config'])
+    params = {}
+    for param in model_config.get('parameters', []):
+        params[param['key']] = param['value']['string_value']
+
+    return {
+        'triton_available': triton_available,
+        'pb_utils': pb_utils,
+        'model_config': model_config,
+        'params': params
+    }
+
+def handle_model_error(pb_utils, triton_available: bool, error: Exception, context: str = ""):
+    """모델 에러 처리 및 응답 생성"""
+    import logging
+    error_msg = f"{context} 처리 중 오류: {str(error)}"
+    logging.error(error_msg)
+
+    if triton_available:
+        return pb_utils.InferenceResponse(
+            output_tensors=[],
+            error=pb_utils.TritonError(error_msg)
+        )
+    return None
+
+# ===================================================================
 
 # 필수 의존성
 try:
@@ -43,16 +89,20 @@ class TritonPythonModel:
 
     def initialize(self, args: Dict) -> None:
         """모델 초기화"""
-        print("🔄 DIT Transformer 초기화 중...")
+        # 공통 초기화 로직 사용
+        init_result = initialize_model_base(args, "DIT_Transformer", ["torch", "diffusers"])
 
-        # 모델 설정 로드
-        self.model_config = json.loads(args['model_config'])
+        # 초기화 결과를 인스턴스 변수에 저장
+        self.triton_available = init_result['triton_available']
+        self.pb_utils = init_result['pb_utils']
+        self.model_config = init_result['model_config']
+        params = init_result['params']
 
-        # 파라미터 추출
-        self.model_name = self._get_parameter("model_name", "black-forest-labs/FLUX.1-schnell")
-        self.in_channels = int(self._get_parameter("in_channels", "64"))
-        self.num_inference_steps = int(self._get_parameter("num_inference_steps", "4"))
-        self.use_fp8 = self._get_parameter("use_fp8", "false").lower() == "true"
+        # DIT 특화 파라미터 추출
+        self.model_name = params.get("model_name", "black-forest-labs/FLUX.1-schnell")
+        self.in_channels = int(params.get("in_channels", "64"))
+        self.num_inference_steps = int(params.get("num_inference_steps", "4"))
+        self.use_fp8 = params.get("use_fp8", "false").lower() == "true"
 
         # 디바이스 설정
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -90,12 +140,6 @@ class TritonPythonModel:
 
         print(f"✅ DIT Transformer 로드 완료: {self.model_name}")
 
-    def _get_parameter(self, key: str, default: str = "") -> str:
-        """모델 파라미터 추출"""
-        for param in self.model_config.get('parameters', []):
-            if param['key'] == key:
-                return param['value']['string_value']
-        return default
 
     def execute(self, requests: List) -> List:
         """배치 추론 실행"""
@@ -106,20 +150,19 @@ class TritonPythonModel:
                 response = self._process_request(request)
                 responses.append(response)
             except Exception as e:
-                error_msg = f"DIT Transformer 처리 중 오류: {str(e)}"
-                print(f"❌ {error_msg}")
-
-                # 에러 응답 생성
-                error_response = pb_utils.InferenceResponse(
-                    error=pb_utils.TritonError(error_msg)
-                ) if TRITON_AVAILABLE else None
+                error_response = handle_model_error(
+                    self.pb_utils,
+                    self.triton_available,
+                    e,
+                    "DIT Transformer"
+                )
                 responses.append(error_response)
 
         return responses
 
     def _process_request(self, request):
         """단일 요청 처리"""
-        if TRITON_AVAILABLE:
+        if self.triton_available:
             # Triton 모드: 실제 데이터
             hidden_states = self._get_input_tensor(request, "hidden_states")
             timestep = self._get_input_tensor(request, "timestep")
@@ -153,20 +196,26 @@ class TritonPythonModel:
         )
 
         # 응답 생성
-        if TRITON_AVAILABLE:
+        if self.triton_available:
             output_tensor = self._torch_to_tensor(noise_pred, "noise_pred")
-            return pb_utils.InferenceResponse([output_tensor])
+            return self.pb_utils.InferenceResponse([output_tensor])
         else:
             return noise_pred
 
     def _get_input_tensor(self, request, name: str) -> torch.Tensor:
         """입력 텐서 추출 및 변환"""
-        triton_tensor = pb_utils.get_input_tensor_by_name(request, name)
+        triton_tensor = self.pb_utils.get_input_tensor_by_name(request, name)
         return self._tensor_to_torch(triton_tensor)
 
     def _tensor_to_torch(self, triton_tensor) -> torch.Tensor:
         """Triton 텐서를 PyTorch 텐서로 변환"""
-        if DLPACK_AVAILABLE and hasattr(triton_tensor, 'to_dlpack'):
+        try:
+            import torch.utils.dlpack
+            dlpack_available = True
+        except ImportError:
+            dlpack_available = False
+
+        if dlpack_available and hasattr(triton_tensor, 'to_dlpack'):
             # DLPack 사용 (메모리 복사 최소화)
             return torch.utils.dlpack.from_dlpack(triton_tensor.to_dlpack())
         else:
@@ -178,13 +227,19 @@ class TritonPythonModel:
 
     def _torch_to_tensor(self, torch_tensor: torch.Tensor, name: str):
         """PyTorch 텐서를 Triton 텐서로 변환"""
-        if DLPACK_AVAILABLE:
+        try:
+            import torch.utils.dlpack
+            dlpack_available = True
+        except ImportError:
+            dlpack_available = False
+
+        if dlpack_available:
             # DLPack 사용
-            return pb_utils.Tensor.from_dlpack(name, torch.utils.dlpack.to_dlpack(torch_tensor))
+            return self.pb_utils.Tensor.from_dlpack(name, torch.utils.dlpack.to_dlpack(torch_tensor))
         else:
             # Fallback: numpy를 통한 변환
             numpy_array = torch_tensor.detach().cpu().numpy()
-            return pb_utils.Tensor(name, numpy_array)
+            return self.pb_utils.Tensor(name, numpy_array)
 
     def _predict_noise(
         self,

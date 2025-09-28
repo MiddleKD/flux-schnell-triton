@@ -14,20 +14,66 @@ import json
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 
-# Triton Python Backend
-try:
-    import triton_python_backend_utils as pb_utils
-    TRITON_AVAILABLE = True
-except ImportError:
-    TRITON_AVAILABLE = False
-    print("⚠️ Triton Python Backend not available - running in test mode")
+# ===================================================================
+# 공통 함수들 (common_functions_template.py에서 복사)
+# ===================================================================
 
-# DLPack 지원 확인 (헌장 요구사항: 우아한 성능 저하)
-try:
-    import torch.utils.dlpack
-    DLPACK_AVAILABLE = True
-except ImportError:
-    DLPACK_AVAILABLE = False
+def check_triton_availability():
+    """Triton Python Backend 가용성 체크 및 Mock 설정"""
+    try:
+        import triton_python_backend_utils as pb_utils
+        return True, pb_utils
+    except ImportError:
+        import logging
+        logging.warning("Triton backend not available - running in test mode")
+
+        class MockPbUtils:
+            class Tensor:
+                def __init__(self, name, data): pass
+            class InferenceRequest: pass
+            class InferenceResponse:
+                def __init__(self, output_tensors=None, error=None): pass
+            class TritonError:
+                def __init__(self, message): pass
+
+        return False, MockPbUtils()
+
+def initialize_model_base(args, model_name: str, required_modules):
+    """모든 모델의 공통 초기화 로직"""
+    import json
+    import logging
+    logging.basicConfig(level=logging.INFO, format=f'[{model_name}] %(message)s')
+
+    # Triton 가용성 체크
+    triton_available, pb_utils = check_triton_availability()
+
+    # 모델 config 파싱
+    model_config = json.loads(args['model_config'])
+    params = {}
+    for param in model_config.get('parameters', []):
+        params[param['key']] = param['value']['string_value']
+
+    return {
+        'triton_available': triton_available,
+        'pb_utils': pb_utils,
+        'model_config': model_config,
+        'params': params
+    }
+
+def handle_model_error(pb_utils, triton_available: bool, error: Exception, context: str = ""):
+    """모델 에러 처리 및 응답 생성"""
+    import logging
+    error_msg = f"{context} 처리 중 오류: {str(error)}"
+    logging.error(error_msg)
+
+    if triton_available:
+        return pb_utils.InferenceResponse(
+            output_tensors=[],
+            error=pb_utils.TritonError(error_msg)
+        )
+    return None
+
+# ===================================================================
 
 # 필수 의존성
 try:
@@ -44,14 +90,16 @@ class TritonPythonModel:
 
     def initialize(self, args: Dict) -> None:
         """모델 초기화"""
-        print("🔄 VAE Decoder 초기화 중...")
+        # 공통 초기화 로직 사용
+        init_result = initialize_model_base(args, "VAE_Decoder", ["torch", "diffusers"])
 
-        # 모델 설정 로드
-        self.model_config = json.loads(args['model_config'])
+        # 초기화 결과를 인스턴스 변수에 저장
+        self.triton_available = init_result['triton_available']
+        self.pb_utils = init_result['pb_utils']
+        self.model_config = init_result['model_config']
+        params = init_result['params']
 
-        # 설정 파라미터 파싱
-        params = self._parse_parameters()
-
+        # VAE 특화 파라미터 추출
         self.model_name = params.get('model_name', 'black-forest-labs/FLUX.1-schnell')
         self.vae_scale_factor = float(params.get('vae_scale_factor', '8'))
         self.scaling_factor = float(params.get('scaling_factor', '0.3611'))
@@ -89,15 +137,6 @@ class TritonPythonModel:
 
         print("✅ VAE Decoder 초기화 완료")
 
-    def _parse_parameters(self) -> Dict[str, str]:
-        """config.pbtxt의 parameters 파싱"""
-        params = {}
-        if 'parameters' in self.model_config:
-            for param in self.model_config['parameters']:
-                key = param['key']
-                value = param['value']['string_value']
-                params[key] = value
-        return params
 
     def _unpack_latents(self, latents: torch.Tensor, height: int, width: int) -> torch.Tensor:
         """
@@ -126,7 +165,13 @@ class TritonPythonModel:
 
     def _tensor_from_dlpack_or_numpy(self, pb_tensor) -> torch.Tensor:
         """DLPack 또는 numpy를 통한 텐서 변환 (우아한 성능 저하)"""
-        if DLPACK_AVAILABLE and hasattr(pb_tensor, 'to_dlpack'):
+        try:
+            import torch.utils.dlpack
+            dlpack_available = True
+        except ImportError:
+            dlpack_available = False
+
+        if dlpack_available and hasattr(pb_tensor, 'to_dlpack'):
             try:
                 return torch.utils.dlpack.from_dlpack(pb_tensor.to_dlpack())
             except Exception:
@@ -136,18 +181,24 @@ class TritonPythonModel:
         numpy_array = pb_tensor.as_numpy()
         return torch.from_numpy(numpy_array)
 
-    def _tensor_to_pb_tensor(self, tensor: torch.Tensor, name: str) -> 'pb_utils.Tensor':
+    def _tensor_to_pb_tensor(self, tensor: torch.Tensor, name: str):
         """torch.Tensor를 pb_utils.Tensor로 변환"""
-        if DLPACK_AVAILABLE and tensor.is_cuda:
+        try:
+            import torch.utils.dlpack
+            dlpack_available = True
+        except ImportError:
+            dlpack_available = False
+
+        if dlpack_available and tensor.is_cuda:
             try:
                 dlpack_tensor = torch.utils.dlpack.to_dlpack(tensor)
-                return pb_utils.Tensor.from_dlpack(name, dlpack_tensor)
+                return self.pb_utils.Tensor.from_dlpack(name, dlpack_tensor)
             except Exception:
                 pass  # fallback to numpy
 
         # numpy fallback
         numpy_array = tensor.cpu().numpy()
-        return pb_utils.Tensor(name, numpy_array)
+        return self.pb_utils.Tensor(name, numpy_array)
 
     def execute(self, requests: List) -> List:
         """배치 추론 실행"""
@@ -156,9 +207,9 @@ class TritonPythonModel:
         for request in requests:
             try:
                 # 입력 텐서 추출
-                latents_pb = pb_utils.get_input_tensor_by_name(request, "latents")
-                height_pb = pb_utils.get_input_tensor_by_name(request, "height")
-                width_pb = pb_utils.get_input_tensor_by_name(request, "width")
+                latents_pb = self.pb_utils.get_input_tensor_by_name(request, "latents")
+                height_pb = self.pb_utils.get_input_tensor_by_name(request, "height")
+                width_pb = self.pb_utils.get_input_tensor_by_name(request, "width")
 
                 # 텐서 변환
                 latents = self._tensor_from_dlpack_or_numpy(latents_pb).to(
@@ -185,13 +236,15 @@ class TritonPythonModel:
 
                 # 출력 텐서 변환
                 output_tensor = self._tensor_to_pb_tensor(images, "images")
-                inference_response = pb_utils.InferenceResponse([output_tensor])
+                inference_response = self.pb_utils.InferenceResponse([output_tensor])
                 responses.append(inference_response)
 
             except Exception as e:
-                print(f"❌ VAE 디코딩 오류: {e}")
-                error_response = pb_utils.InferenceResponse(
-                    [], error=pb_utils.TritonError(f"VAE decoding failed: {str(e)}")
+                error_response = handle_model_error(
+                    self.pb_utils,
+                    self.triton_available,
+                    e,
+                    "VAE Decoder"
                 )
                 responses.append(error_response)
 
@@ -212,7 +265,12 @@ def test_vae_decoder():
     print("🧪 VAE Decoder 테스트 시작")
 
     # DLPack 사용 여부 결정 (테스트 시 분기처리)
-    use_dlpack = DLPACK_AVAILABLE and torch.cuda.is_available()
+    try:
+        import torch.utils.dlpack
+        dlpack_available = True
+    except ImportError:
+        dlpack_available = False
+    use_dlpack = dlpack_available and torch.cuda.is_available()
     print(f"📊 DLPack 사용: {use_dlpack}")
 
     # 테스트 모델 설정
@@ -246,8 +304,9 @@ def test_vae_decoder():
 
         print(f"📏 테스트 입력 shape: latents={test_latents.shape}, height={height}, width={width}")
 
-        # Mock request 생성 (TRITON_AVAILABLE=False일 때)
-        if not TRITON_AVAILABLE:
+        # Mock request 생성 (triton_available=False일 때)
+        triton_available, _ = check_triton_availability()
+        if not triton_available:
             class MockTensor:
                 def __init__(self, data):
                     self.data = data
